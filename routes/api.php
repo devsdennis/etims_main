@@ -16,3 +16,12 @@ use Illuminate\Http\Request;
 Route::middleware('auth:api')->get('/user', function (Request $request) {
     return $request->user();
 });
+
+
+// Define the callback route for products
+Route::post('products/{product}/callback', [ProductController::class, 'handleCallback'])
+    ->name('api.products.callback'); 
+
+Route::post('pull-qty','ProductController@pullQty');
+    
+Route::post('/etims/callback', 'EtimsController@handleCallback');

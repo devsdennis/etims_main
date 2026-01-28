@@ -59,6 +59,7 @@ use App\Http\Controllers\UnitController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\VariationTemplateController;
 use App\Http\Controllers\WarrantyController;
+use App\Http\Controllers\EtimsController;
 use Illuminate\Support\Facades\Route;
 
 /*

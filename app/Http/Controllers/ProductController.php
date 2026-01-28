@@ -27,6 +27,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Yajra\DataTables\Facades\DataTables;
 use App\Events\ProductsCreatedOrModified;
+use App\Http\Controllers\EtimsController; //Etims Controller
 
 class ProductController extends Controller
 {
@@ -38,6 +39,8 @@ class ProductController extends Controller
     protected $moduleUtil;
 
     private $barcode_types;
+    
+    protected $etimsController; //etimscontroller
 
     /**
      * Constructor
@@ -45,13 +48,16 @@ class ProductController extends Controller
      * @param  ProductUtils  $product
      * @return void
      */
-    public function __construct(ProductUtil $productUtil, ModuleUtil $moduleUtil)
+    public function __construct(ProductUtil $productUtil, ModuleUtil $moduleUtil, EtimsController $etimsController)
     {
         $this->productUtil = $productUtil;
         $this->moduleUtil = $moduleUtil;
 
         //barcode types
         $this->barcode_types = $this->productUtil->barcode_types();
+
+         //Etims controller
+        $this->etimsController = $etimsController; //Etims Controller
     }
 
     /**
@@ -443,8 +449,51 @@ class ProductController extends Controller
         if (! auth()->user()->can('product.create')) {
             abort(403, 'Unauthorized action.');
         }
+
+        
+
         try {
             $business_id = $request->session()->get('user.business_id');
+
+             // Check for required ETIMS fields
+        $etims_errors = [];
+        
+        if (empty($request->input('product_custom_field1'))) {
+            $etims_errors[] = 'Item Class Code is required';
+        }
+        
+        if (empty($request->input('product_custom_field2'))) {
+            $etims_errors[] = 'Item Type Code is required';
+        }
+        
+        if (empty($request->input('product_custom_field3'))) {
+            $etims_errors[] = 'Origin Nation Code is required';
+        }
+        
+        if (empty($request->input('product_custom_field4'))) {
+            $etims_errors[] = 'Package Unit Code is required';
+        }
+        
+        if (empty($request->input('product_custom_field5'))) {
+            $etims_errors[] = 'Quantity Unit Code is required';
+        }
+        
+        if (empty($request->input('product_custom_field6'))) {
+            $etims_errors[] = 'Tax Type Code is required';
+        }
+        
+        // If there are errors, return them to the frontend
+        if (!empty($etims_errors)) {
+            $output = [
+                'success' => 0,
+                'msg' => 'Please fill in all required ETIMS fields:<br>' . implode('<br>', $etims_errors)
+            ];
+            
+            return redirect('products/create')
+                ->withInput()
+                ->with('status', $output);
+        }
+
             $form_fields = ['name', 'brand_id', 'unit_id', 'category_id', 'tax', 'type', 'barcode_type', 'sku', 'alert_quantity', 'tax_type', 'weight', 'product_description', 'sub_unit_ids', 'preparation_time_in_minutes', 'product_custom_field1', 'product_custom_field2', 'product_custom_field3', 'product_custom_field4', 'product_custom_field5', 'product_custom_field6', 'product_custom_field7', 'product_custom_field8', 'product_custom_field9', 'product_custom_field10', 'product_custom_field11', 'product_custom_field12', 'product_custom_field13', 'product_custom_field14', 'product_custom_field15', 'product_custom_field16', 'product_custom_field17', 'product_custom_field18', 'product_custom_field19', 'product_custom_field20',];
 
             $module_form_fields = $this->moduleUtil->getModuleFormField('product_form_fields');
@@ -548,6 +597,147 @@ class ProductController extends Controller
                 $this->moduleUtil->getModuleData('after_product_saved', ['product' => $product, 'request' => $request]);
             }
 
+            //Start of etims integration              
+
+            //After product is created, prepare business item data              
+            $businessItemData = $this->prepareBusinessItemData($product, $request);               
+
+            // Call the business item creation              
+            $businessItemResult = $this->etimsController->createBusinessItem($businessItemData);              
+
+            // Parse and validate the response             
+            $responseContent = $businessItemResult->getContent();             
+            $responseData = json_decode($responseContent, true);              
+
+            // Check if the response contains has the correct status code to confirm success             
+            // Check if the response indicates a failure             
+            if (!isset($responseData['status']) || $responseData['status'] !== 'SUCCESS')               
+            {                 
+                DB::rollBack();                 
+                \Log::error('ETIMS business item creation failed for product ID: ' . $product->id, [                     
+                    'response' => $businessItemResult,                 
+                ]);                 
+                
+                $output = [
+                    'success' => 0,                 
+                    'msg' => __('Product creation failed in ETIMS. Please try again later.'),             
+                ];             
+                
+                return redirect('products/create')->with('status', $output);             
+            }
+
+            // ===== NEW CODE: Add default stock adjustment for each successful location =====
+            try {
+                // Get location_results from the business item creation response
+                $locationResults = $responseData['location_results'] ?? [];
+                
+                \Log::info('Creating stock adjustment for product ID: ' . $product->id, [
+                    'location_results' => $locationResults
+                ]);
+                
+                $stockAdjustmentFailures = [];
+                $stockAdjustmentSuccesses = [];
+                
+                // Loop through each location that was successfully created
+                // The location ID is the KEY in the associative array
+                foreach ($locationResults as $locationId => $result) {
+                    // Only process locations that were successfully created (no error)
+                    if (!isset($result['error'])) {
+                        \Log::info('Attempting stock adjustment for location', [
+                            'product_id' => $product->id,
+                            'location_id' => $locationId,
+                            'etims_id' => $result['etimsId'] ?? null
+                        ]);
+                        
+                        // Call the stock adjustment with default quantity of 10,000,000
+                        // Make sure $locationId is cast to integer if needed
+                        $stockAdjustmentResult = $this->etimsController->addStockAdjustment(
+                            $product->id, 
+                            (int)$locationId,  // Cast to int to ensure it's the correct type
+                            10000000
+                        );
+                        
+                        // Track the result
+                        if ($stockAdjustmentResult['success']) {
+                            $stockAdjustmentSuccesses[] = $locationId;
+                            
+                            \Log::info('Stock adjustment successful for location', [
+                                'product_id' => $product->id,
+                                'location_id' => $locationId,
+                                'quantity' => 10000000,
+                                'response' => $stockAdjustmentResult['response']
+                            ]);
+                        } else {
+                            $stockAdjustmentFailures[] = $locationId;
+                            
+                            \Log::error('Stock adjustment failed for location', [
+                                'product_id' => $product->id,
+                                'location_id' => $locationId,
+                                'quantity' => 10000000,
+                                'response' => $stockAdjustmentResult['response']
+                            ]);
+                        }
+                    } else {
+                        \Log::warning('Skipping stock adjustment for location with error', [
+                            'product_id' => $product->id,
+                            'location_id' => $locationId,
+                            'error' => $result['error']
+                        ]);
+                    }
+                }
+                
+                // If ALL stock adjustments failed, rollback
+                if (!empty($locationResults) && count($stockAdjustmentFailures) === count($locationResults)) {
+                    DB::rollBack();
+                    
+                    \Log::error('All ETIMS stock adjustments failed for product ID: ' . $product->id, [
+                        'failed_locations' => $stockAdjustmentFailures,
+                        'total_locations' => count($locationResults)
+                    ]);
+                    
+                    $output = [
+                        'success' => 0,
+                        'msg' => __('Product created in ETIMS but all stock adjustments failed. Please try again later.'),
+                    ];
+                    
+                    return redirect('products/create')->with('status', $output);
+                }
+                
+                // If SOME stock adjustments failed, log warning but continue
+                if (!empty($stockAdjustmentFailures)) {
+                    \Log::warning('Some ETIMS stock adjustments failed for product ID: ' . $product->id, [
+                        'successful_locations' => $stockAdjustmentSuccesses,
+                        'failed_locations' => $stockAdjustmentFailures,
+                    ]);
+                }
+                
+                \Log::info('Product created successfully with default stock in ETIMS', [
+                    'product_id' => $product->id,
+                    'successful_locations' => $stockAdjustmentSuccesses,
+                    'failed_locations' => $stockAdjustmentFailures,
+                    'default_quantity' => 10000000,
+                ]);
+                
+            } catch (\Exception $e) {
+                // Rollback on any exception
+                DB::rollBack();
+                
+                \Log::error('Exception during ETIMS stock adjustment: ' . $e->getMessage(), [
+                    'product_id' => $product->id,
+                    'exception' => $e->getTraceAsString(),
+                ]);
+                
+                $output = [
+                    'success' => 0,
+                    'msg' => __('Product creation failed during stock adjustment. Please try again later.'),
+                ];
+                
+                return redirect('products/create')->with('status', $output);
+            }
+            // ===== END OF NEW CODE =====
+
+            //End of etims integratipon
+
             Media::uploadMedia($product->business_id, $product, $request, 'product_brochure', true);
 
             DB::commit();
@@ -581,8 +771,217 @@ class ProductController extends Controller
         return redirect('products')->with('status', $output);
     }
 
-    /**
-     * Display the specified resource.
+    //Prepare the business items function for etims 
+    //Prepare the business items function for etims 
+    private function prepareBusinessItemData(Product $product, Request $request)
+    {
+            // Get the first variation's default price
+            $defaultPrice = $product->variations()
+                ->first()
+                ->default_purchase_price ?? 0;
+
+            // Extract values directly from product custom fields (no defaults - can be null)
+            $itemClassCode = $product->product_custom_field1;
+            $itemTypeCode = $product->product_custom_field2;
+            $originNationCode = $product->product_custom_field3;
+            $packageUnitCode = $product->product_custom_field4;
+            $quantityUnitCode = $product->product_custom_field5;
+            $taxTypeCode = $product->product_custom_field6;
+
+            $cleanPrice = preg_replace('/,/', '', $request->input('single_dsp_inc_tax')); // Remove commas from price
+
+            //Get the product locations
+            $productLocations = $product->product_locations()->pluck('product_locations.location_id')->toArray();
+
+            return [
+                'product_id'=> $product->id,
+                'item_class_code' => $itemClassCode,
+                'item_type_code' => $itemTypeCode,
+                'item_name' => $product->name,
+                'origin_nation_code' => $originNationCode,
+                'package_unit_code' => $packageUnitCode,
+                'quantity_unit_code' => $quantityUnitCode,
+                'tax_type_code' => $taxTypeCode,
+                'default_unit_price' =>  (float) $cleanPrice,
+                'import_item_ref' => '2323',
+                'is_stock_item' => (bool) $product->enable_stock,
+                'callback_url' => route('api.products.callback', ['product' => $product->id]),
+                'product_locations'=> $productLocations
+            ];
+    }
+ 
+     public function createBusinessItem(array $data)
+    {
+        try {
+                // Group locations by API key to minimize redundant API calls
+                $apiKeyLocationsMap = [];
+                foreach ($data['product_locations'] as $locationId) {
+                    $apiKey = $this->retrieveApiKeyForLocation($locationId);
+                    
+                    if ($apiKey === null) {
+                        Log::error('No API key found for location', [
+                            'location_id' => $locationId
+                        ]);
+
+                        return response()->json([
+                            'error' => 'No API key found for location: ' . $locationId,
+                            'status' => 'API_KEY_MISSING'
+                        ], 400);
+                    }
+
+                    // Group locations by their API key
+                    $apiKeyLocationsMap[$apiKey][] = $locationId;
+            }
+
+            // Track results for processed locations
+            $locationResults = [];
+
+            // Iterate through unique API keys
+            foreach ($apiKeyLocationsMap as $apiKey => $locationsWithThisKey) {
+                try {
+                    $client = new Client();
+                    
+                    Log::info('Sending Business Item Creation Request', [
+                        'request_data' => $data,
+                        'locations_with_key' => $locationsWithThisKey,
+                        'api_key' => substr($apiKey, 0, 5) . '...' // Partially mask API key for security
+                    ]);
+
+                    $response = $client->post('https://api.digitax.tech/items', [
+                    'json' => [
+                        'active' => 'True',
+                        'item_class_code' => $data['item_class_code'],
+                        'item_type_code' => $data['item_type_code'],
+                        'item_name' => $data['item_name'],
+                        'origin_nation_code' => $data['origin_nation_code'],
+                        'package_unit_code' => $data['package_unit_code'],
+                        'quantity_unit_code' => $data['quantity_unit_code'],
+                        'tax_type_code' => $data['tax_type_code'],
+                        'default_unit_price' => (float) max(1, $this->cleanUnitPrice($data['default_unit_price'])),
+                        'is_stock_item' => (bool)'True',
+                        'callback_url' => $data['callback_url']
+                    ],
+                    'headers' => [
+                        'X-API-Key' => $apiKey,
+                        'Accept' => 'application/json',
+                        'Content-Type' => 'application/json',
+                    ]
+                ]);
+                    
+                    $responseData = json_decode($response->getBody(), true);
+                    
+                    Log::info('Business Item Created Successfully', [
+                        'response' => $responseData,
+                        'item_name' => $data['item_name'],
+                        'locations_with_key' => $locationsWithThisKey
+                    ]);
+
+                    // Extract and validate ETIMS data
+                    $etimsId = $responseData['id'] ?? null;
+                    $etimsItemCode = $responseData['etims_item_code'] ?? null;
+                    
+                    if (!$etimsId || !$etimsItemCode) {
+                        throw new Exception('Missing required ETIMS data for locations: ' . implode(', ', $locationsWithThisKey));
+                    }
+
+                    // Update product_locations pivot table for ALL locations with this API key
+                    foreach ($locationsWithThisKey as $locationId) {
+                        $updateResult = DB::table('product_locations')
+                            ->where('product_id', $data['product_id'])
+                            ->where('location_id', $locationId)
+                            ->update([
+                                'digitax_id' => $etimsId,
+                                'item_code' => $etimsItemCode
+                            ]);
+                    
+                        Log::info('Product location updated successfully', [
+                            'location_id' => $locationId,
+                            'etims_id' => $etimsId,
+                            'etims_item_code' => $etimsItemCode,
+                            'rows_updated' => $updateResult
+                        ]);
+
+                        // Store results for this location
+                        $locationResults[$locationId] = [
+                            'etimsId' => $etimsId,
+                            'etimsItemCode' => $etimsItemCode,
+                            'rowsUpdated' => $updateResult
+                        ];
+                    }
+                
+                } catch (RequestException $e) {
+                    // Log the error for these locations
+                    $statusCode = $e->hasResponse() ? $e->getResponse()->getStatusCode() : 500;
+                    $responseBody = $e->hasResponse() ? json_decode($e->getResponse()->getBody(), true) : null;
+                    
+                    Log::error('Business Item API Error for Locations', [
+                        'locations' => $locationsWithThisKey,
+                        'status_code' => $statusCode,
+                        'error_message' => $e->getMessage(),
+                        'response_body' => $responseBody
+                    ]);
+
+                    // Add error details to location results for each location
+                    foreach ($locationsWithThisKey as $locationId) {
+                        $locationResults[$locationId] = [
+                            'error' => $e->getMessage(),
+                            'status_code' => $statusCode
+                        ];
+                    }
+                } catch (Exception $e) {
+                    Log::error('Failed to update product locations', [
+                        'locations' => $locationsWithThisKey,
+                        'error' => $e->getMessage()
+                    ]);
+
+                    // Add error details to location results for each location
+                    foreach ($locationsWithThisKey as $locationId) {
+                        $locationResults[$locationId] = [
+                            'error' => $e->getMessage()
+                        ];
+                    }
+                }
+            }
+
+            // Determine overall status based on results
+            $overallStatus = 'SUCCESS';
+            $failedLocations = [];
+            foreach ($locationResults as $locationId => $result) {
+                if (isset($result['error'])) {
+                    $overallStatus = 'PARTIAL_ERROR';
+                    $failedLocations[] = $locationId;
+                }
+            }
+
+            // Log comprehensive summary of all location results
+            Log::info('Business Item Creation Summary', [
+                'total_locations' => count($data['product_locations']),
+                'status' => $overallStatus,
+                'location_results' => $locationResults,
+                'failed_locations' => $failedLocations
+            ]);
+
+            return response()->json([
+                'location_results' => $locationResults,
+                'status' => $overallStatus,
+                'failed_locations' => $failedLocations
+            ], 200);
+            
+        } catch (\Exception $e) {
+            Log::error('Business Item Unexpected Global Error', [
+                'error_message' => $e->getMessage(),
+                'request_data' => $data,
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return response()->json([
+                'error' => 'An unexpected error occurred while processing your request',
+                'status' => 'INTERNAL_ERROR'
+            ], 500);
+        }
+    }
+
+     /* Display the specified resource.
      *
      * @param  \App\Product  $product
      * @return \Illuminate\Http\Response
@@ -661,6 +1060,115 @@ class ProductController extends Controller
                 ->with(compact('categories', 'brands', 'units', 'sub_units', 'taxes', 'tax_attributes', 'barcode_types', 'product', 'sub_categories', 'default_profit_percent', 'business_locations', 'rack_details', 'selling_price_group_count', 'module_form_parts', 'product_types', 'common_settings', 'warranties', 'pos_module_data', 'alert_quantity'));
     }
 
+     //Push default values to etims
+    public function pushDefaultQuantitiesToEtims()
+    {
+        try {
+            // Total number of products in the system
+            $totalProductsInSystem = Product::count();
+            
+            // Find products without ETIMS ID (null or empty)
+            $productsWithoutEtimsId = Product::join('product_locations', 'products.id', '=', 'product_locations.product_id')
+                                            ->where(function($query) {
+                                                $query->whereNull('product_locations.digitax_id')
+                                                    ->orWhere('product_locations.digitax_id', '');
+                                            })
+                                            ->select('products.*', 'product_locations.location_id')
+                                            
+                                            ->get();
+            
+            // Extract product details without ETIMS ID
+            $productsWithoutEtimsIdDetails = $productsWithoutEtimsId->map(function($product) {
+                return [
+                    'id' => $product->id,
+                    'name' => $product->name
+                ];
+            })->toArray();
+            
+            // Fetch products with null or empty stock_update in product_locations
+            $products = Product::join('product_locations', 'products.id', '=', 'product_locations.product_id')
+                ->where(function($query) {
+                    $query->whereNull('product_locations.stock_update')
+                        ->orWhere('product_locations.stock_update', '');
+                })
+                ->select('products.*', 'product_locations.location_id')
+                // ->distinct()
+                ->get();
+            
+            $totalProductsWithEtimsId = $products->count();
+            $successCount = 0;
+            $failureCount = 0;
+            
+            foreach ($products as $product) {
+                $productId = $product->id;
+                $locationId = $product->location_id; // Use the location_id from product_locations
+                $defaultQuantity = 10000000;
+                
+                // Attempt to adjust stock for the product
+                $result = $this->addStockAdjustment($productId, $locationId, $defaultQuantity);
+                
+                if ($result['success']) {
+                    // Update stock_update in product_locations
+                    try {
+                        DB::table('product_locations')
+                            ->where('product_id', $productId)
+                            ->where('location_id', $locationId)
+                            ->update([
+                                'stock_update' => 'etims'
+                            ]);
+                        
+                        $successCount++;
+                    } catch (\Exception $updateException) {
+                        // Log error if updating product_locations fails
+                        Log::error("Failed to update product_locations for product {$productId}", [
+                            'product_id' => $productId,
+                            'location_id' => $locationId,
+                            'error' => $updateException->getMessage()
+                        ]);
+                        $failureCount++;
+                    }
+                } else {
+                    // Log failure with product ID
+                    Log::error("Stock adjustment failed for product {$productId}", [
+                        'product_id' => $productId,
+                        'location_id' => $locationId,
+                        'response' => $result['response']
+                    ]);
+                    $failureCount++;
+                }
+            }
+            
+            // Log detailed information
+            Log::channel('papertrail')->info("Stock adjustment process completed.", [
+                'total_products_in_system' => $totalProductsInSystem,
+                'products_processed' => $totalProductsWithEtimsId,
+                'successful_adjustments' => $successCount,
+                'failed_adjustments' => $failureCount,
+                'products_without_etims_id_details' => $productsWithoutEtimsIdDetails
+            ]);
+            
+            return [
+                'total_products_in_system' => $totalProductsInSystem,
+                'products_processed' => $totalProductsWithEtimsId,
+                'successful_adjustments' => $successCount,
+                'failed_adjustments' => $failureCount,
+                'products_without_etims_id_details' => $productsWithoutEtimsIdDetails
+            ];
+        } catch (\Exception $e) {
+            // Log any critical errors
+            Log::channel('papertrail')->error("Critical error in stock adjustment process: " . $e->getMessage());
+            
+            return [
+                'total_products_in_system' => 0,
+                'products_processed' => 0,
+                'successful_adjustments' => 0,
+                'failed_adjustments' => 0,
+                'products_without_etims_id_details' => [],
+                'error' => $e->getMessage()
+            ];
+        }   
+    }   
+
     /**
      * Update the specified resource in storage.
      *
@@ -676,6 +1184,46 @@ class ProductController extends Controller
 
         try {
             $business_id = $request->session()->get('user.business_id');
+
+             // Check for required ETIMS fields
+        $etims_errors = [];
+        
+        if (empty($request->input('product_custom_field1'))) {
+            $etims_errors[] = 'Item Class Code is required';
+        }
+        
+        if (empty($request->input('product_custom_field2'))) {
+            $etims_errors[] = 'Item Type Code is required';
+        }
+        
+        if (empty($request->input('product_custom_field3'))) {
+            $etims_errors[] = 'Origin Nation Code is required';
+        }
+        
+        if (empty($request->input('product_custom_field4'))) {
+            $etims_errors[] = 'Package Unit Code is required';
+        }
+        
+        if (empty($request->input('product_custom_field5'))) {
+            $etims_errors[] = 'Quantity Unit Code is required';
+        }
+        
+        if (empty($request->input('product_custom_field6'))) {
+            $etims_errors[] = 'Tax Type Code is required';
+        }
+        
+        // If there are errors, return them to the frontend
+        if (!empty($etims_errors)) {
+            $output = [
+                'success' => 0,
+                'msg' => 'Please fill in all required ETIMS fields:<br>' . implode('<br>', $etims_errors)
+            ];
+            
+            return redirect('products/create')
+                ->withInput()
+                ->with('status', $output);
+        }
+
             $product_details = $request->only(['name', 'brand_id', 'unit_id', 'category_id', 'tax', 'barcode_type', 'sku', 'alert_quantity', 'tax_type', 'weight', 'product_description', 'sub_unit_ids', 'preparation_time_in_minutes', 'product_custom_field1', 'product_custom_field2', 'product_custom_field3', 'product_custom_field4', 'product_custom_field5', 'product_custom_field6', 'product_custom_field7', 'product_custom_field8', 'product_custom_field9', 'product_custom_field10', 'product_custom_field11', 'product_custom_field12', 'product_custom_field13', 'product_custom_field14', 'product_custom_field15', 'product_custom_field16', 'product_custom_field17', 'product_custom_field18', 'product_custom_field19', 'product_custom_field20',]);
 
             DB::beginTransaction();
@@ -1437,6 +1985,46 @@ class ProductController extends Controller
 
         try {
             $business_id = $request->session()->get('user.business_id');
+
+             // Check for required ETIMS fields
+        $etims_errors = [];
+        
+        if (empty($request->input('product_custom_field1'))) {
+            $etims_errors[] = 'Item Class Code is required';
+        }
+        
+        if (empty($request->input('product_custom_field2'))) {
+            $etims_errors[] = 'Item Type Code is required';
+        }
+        
+        if (empty($request->input('product_custom_field3'))) {
+            $etims_errors[] = 'Origin Nation Code is required';
+        }
+        
+        if (empty($request->input('product_custom_field4'))) {
+            $etims_errors[] = 'Package Unit Code is required';
+        }
+        
+        if (empty($request->input('product_custom_field5'))) {
+            $etims_errors[] = 'Quantity Unit Code is required';
+        }
+        
+        if (empty($request->input('product_custom_field6'))) {
+            $etims_errors[] = 'Tax Type Code is required';
+        }
+        
+        // If there are errors, return them to the frontend
+        if (!empty($etims_errors)) {
+            $output = [
+                'success' => 0,
+                'msg' => 'Please fill in all required ETIMS fields:<br>' . implode('<br>', $etims_errors)
+            ];
+            
+            return redirect('products/create')
+                ->withInput()
+                ->with('status', $output);
+        }
+
             $form_fields = ['name', 'brand_id', 'unit_id', 'category_id', 'tax', 'barcode_type', 'tax_type', 'sku',
                 'alert_quantity', 'type', 'sub_unit_ids', 'sub_category_id', 'weight', 'product_description', 'product_custom_field1', 'product_custom_field2', 'product_custom_field3', 'product_custom_field4', 'product_custom_field5', 'product_custom_field6', 'product_custom_field7', 'product_custom_field8', 'product_custom_field9', 'product_custom_field10', 'product_custom_field11', 'product_custom_field12', 'product_custom_field13', 'product_custom_field14', 'product_custom_field15', 'product_custom_field16', 'product_custom_field17', 'product_custom_field18', 'product_custom_field19', 'product_custom_field20'];
 

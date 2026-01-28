@@ -593,6 +593,42 @@ class SellPosController extends Controller
 
                 $this->transactionUtil->activityLog($transaction, 'added');
 
+                // Skip eTIMS submission for "quotation" or "proforma" statuses
+                    if (!in_array($input['status'], ['draft', 'proforma', 'suspended','quotation'], true)
+                        &&
+                        !(isset($input['is_suspend']) && $input['is_suspend'] == 1)
+                        )
+                    {
+
+                            // Call the etims controller
+                            $etimsController = new \App\Http\Controllers\EtimsController();
+                            //$etimsUrl = $etimsController->submitSaleToEtims($transaction);
+
+                            $etimsResult = $etimsController->submitSaleToEtims($transaction);
+
+                            $successStatusCodes = [200]; // Add the specific successful status codes here
+                            if (!in_array($etimsResult['status'], $successStatusCodes)) {
+                                DB::rollBack();
+
+                                // Soft delete the transaction instead of completely rolling back
+                                $delete = $transaction->delete();
+
+                                if ($delete) {
+                                    \Log::info('Transaction deleted after failed eTIMS submission');
+                                }
+
+                                $output = ['success' => 0, 'msg' => 'Failed to submit sale to eTIMS'];
+
+                                if (! $is_direct_sale) {
+                                    return $output;
+                                } else {
+                                    return redirect()
+                                        ->action([\App\Http\Controllers\SellController::class, 'index'])
+                                        ->with('status', $output);
+                                }
+                            }
+
+                    }
                 DB::commit();
 
                 SellCreatedOrModified::dispatch($transaction);
@@ -739,6 +775,23 @@ class SellPosController extends Controller
 
         $receipt_details = $this->transactionUtil->getReceiptDetails($transaction_id, $location_id, $invoice_layout, $business_details, $location_details, $receipt_printer_type);
 
+        //Add the etims_url from the custom_field_1
+        //Display onto the receipt
+        $transaction = Transaction::find($transaction_id);
+        if ($transaction && $transaction->custom_field_1) {
+            $receipt_details->etims_url = $transaction->custom_field_1;
+            $receipt_details->etims_receipt = $transaction->custom_field_2;
+            $receipt_details->etims_invoice_number = $transaction->custom_field_3;
+            $receipt_details->serial_number = $transaction->custom_field_4;
+            $receipt_details->etims_date = $transaction->custom_field_6;
+            $receipt_details->etims_time = $transaction->custom_field_7;
+            $receipt_details->customer_pin = $transaction->custom_field_8;
+        }
+        
+        
+        //Insert the payment Status;
+        $receipt_details->payment_status = $transaction->payment_status;
+       
         $currency_details = [
             'symbol' => $business_details->currency_symbol,
             'thousand_separator' => $business_details->thousand_separator,

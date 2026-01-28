@@ -589,114 +589,133 @@ public function createBusinessItem(array $data)
    
  
 
-    //Push default values to etims
-    public function pushDefaultQuantitiesToEtims()
+   //Push default values to etims
+public function pushDefaultQuantitiesToEtims()
 {
-        try {
-            // Total number of products in the system
-            $totalProductsInSystem = Product::count();
+    try {
+        // Total number of products in the system
+        $totalProductsInSystem = Product::count();
+        
+        // Find products without ETIMS ID (null or empty)
+        $productsWithoutEtimsId = Product::join('product_locations', 'products.id', '=', 'product_locations.product_id')
+                                        ->where(function($query) {
+                                            $query->whereNull('product_locations.digitax_id')
+                                                ->orWhere('product_locations.digitax_id', '');
+                                        })
+                                        ->select('products.*', 'product_locations.location_id')
+                                        
+                                        ->get();
+        
+        // Extract product details without ETIMS ID
+        $productsWithoutEtimsIdDetails = $productsWithoutEtimsId->map(function($product) {
+            return [
+                'id' => $product->id,
+                'name' => $product->name
+            ];
+        })->toArray();
+        
+        // Fetch products with null or empty stock_update in product_locations
+        // EXCLUDE products where product_custom_field_2 (item_type_code) is '3'
+        $products = Product::join('product_locations', 'products.id', '=', 'product_locations.product_id')
+            ->where(function($query) {
+                $query->whereNull('product_locations.stock_update')
+                    ->orWhere('product_locations.stock_update', '');
+            })
+            ->where(function($query) {
+                $query->whereNull('products.product_custom_field_2')
+                    ->orWhere('products.product_custom_field_2', '!=', '3');
+            })
+            ->select('products.*', 'product_locations.location_id')
+            // ->distinct()
+            ->get();
+        
+        $totalProductsWithEtimsId = $products->count();
+        $successCount = 0;
+        $failureCount = 0;
+        $skippedCount = 0;
+        
+        foreach ($products as $product) {
+            $productId = $product->id;
+            $locationId = $product->location_id; // Use the location_id from product_locations
+            $defaultQuantity = 10000000;
             
-            // Find products without ETIMS ID (null or empty)
-            $productsWithoutEtimsId = Product::join('product_locations', 'products.id', '=', 'product_locations.product_id')
-                                            ->where(function($query) {
-                                                $query->whereNull('product_locations.digitax_id')
-                                                    ->orWhere('product_locations.digitax_id', '');
-                                            })
-                                            ->select('products.*', 'product_locations.location_id')
-                                            
-                                            ->get();
+            // Double-check item_type_code before processing
+            if ($product->product_custom_field_2 == '3') {
+                Log::info("Skipping product {$productId} - item_type_code is 3 (service item)", [
+                    'product_id' => $productId,
+                    'item_type_code' => $product->product_custom_field_2
+                ]);
+                $skippedCount++;
+                continue;
+            }
             
-            // Extract product details without ETIMS ID
-            $productsWithoutEtimsIdDetails = $productsWithoutEtimsId->map(function($product) {
-                return [
-                    'id' => $product->id,
-                    'name' => $product->name
-                ];
-            })->toArray();
+            // Attempt to adjust stock for the product
+            $result = $this->addStockAdjustment($productId, $locationId, $defaultQuantity);
             
-            // Fetch products with null or empty stock_update in product_locations
-            $products = Product::join('product_locations', 'products.id', '=', 'product_locations.product_id')
-                ->where(function($query) {
-                    $query->whereNull('product_locations.stock_update')
-                        ->orWhere('product_locations.stock_update', '');
-                })
-                ->select('products.*', 'product_locations.location_id')
-                // ->distinct()
-                ->get();
-            
-            $totalProductsWithEtimsId = $products->count();
-            $successCount = 0;
-            $failureCount = 0;
-            
-            foreach ($products as $product) {
-                $productId = $product->id;
-                $locationId = $product->location_id; // Use the location_id from product_locations
-                $defaultQuantity = 10000000;
-                
-                // Attempt to adjust stock for the product
-                $result = $this->addStockAdjustment($productId, $locationId, $defaultQuantity);
-                
-                if ($result['success']) {
-                    // Update stock_update in product_locations
-                    try {
-                        DB::table('product_locations')
-                            ->where('product_id', $productId)
-                            ->where('location_id', $locationId)
-                            ->update([
-                                'stock_update' => 'etims'
-                            ]);
-                        
-                        $successCount++;
-                    } catch (\Exception $updateException) {
-                        // Log error if updating product_locations fails
-                        Log::error("Failed to update product_locations for product {$productId}", [
-                            'product_id' => $productId,
-                            'location_id' => $locationId,
-                            'error' => $updateException->getMessage()
+            if ($result['success']) {
+                // Update stock_update in product_locations
+                try {
+                    DB::table('product_locations')
+                        ->where('product_id', $productId)
+                        ->where('location_id', $locationId)
+                        ->update([
+                            'stock_update' => 'etims'
                         ]);
-                        $failureCount++;
-                    }
-                } else {
-                    // Log failure with product ID
-                    Log::error("Stock adjustment failed for product {$productId}", [
+                    
+                    $successCount++;
+                } catch (\Exception $updateException) {
+                    // Log error if updating product_locations fails
+                    Log::error("Failed to update product_locations for product {$productId}", [
                         'product_id' => $productId,
                         'location_id' => $locationId,
-                        'response' => $result['response']
+                        'error' => $updateException->getMessage()
                     ]);
                     $failureCount++;
                 }
+            } else {
+                // Log failure with product ID
+                Log::error("Stock adjustment failed for product {$productId}", [
+                    'product_id' => $productId,
+                    'location_id' => $locationId,
+                    'response' => $result['response']
+                ]);
+                $failureCount++;
             }
-            
-            // Log detailed information
-            Log::channel('papertrail')->info("Stock adjustment process completed.", [
-                'total_products_in_system' => $totalProductsInSystem,
-                'products_processed' => $totalProductsWithEtimsId,
-                'successful_adjustments' => $successCount,
-                'failed_adjustments' => $failureCount,
-                'products_without_etims_id_details' => $productsWithoutEtimsIdDetails
-            ]);
-            
-            return [
-                'total_products_in_system' => $totalProductsInSystem,
-                'products_processed' => $totalProductsWithEtimsId,
-                'successful_adjustments' => $successCount,
-                'failed_adjustments' => $failureCount,
-                'products_without_etims_id_details' => $productsWithoutEtimsIdDetails
-            ];
-        } catch (\Exception $e) {
-            // Log any critical errors
-            Log::channel('papertrail')->error("Critical error in stock adjustment process: " . $e->getMessage());
-            
-            return [
-                'total_products_in_system' => 0,
-                'products_processed' => 0,
-                'successful_adjustments' => 0,
-                'failed_adjustments' => 0,
-                'products_without_etims_id_details' => [],
-                'error' => $e->getMessage()
-            ];
-        }   
-    }
+        }
+        
+        // Log detailed information
+        Log::channel('papertrail')->info("Stock adjustment process completed.", [
+            'total_products_in_system' => $totalProductsInSystem,
+            'products_processed' => $totalProductsWithEtimsId,
+            'successful_adjustments' => $successCount,
+            'failed_adjustments' => $failureCount,
+            'skipped_service_items' => $skippedCount,
+            'products_without_etims_id_details' => $productsWithoutEtimsIdDetails
+        ]);
+        
+        return [
+            'total_products_in_system' => $totalProductsInSystem,
+            'products_processed' => $totalProductsWithEtimsId,
+            'successful_adjustments' => $successCount,
+            'failed_adjustments' => $failureCount,
+            'skipped_service_items' => $skippedCount,
+            'products_without_etims_id_details' => $productsWithoutEtimsIdDetails
+        ];
+    } catch (\Exception $e) {
+        // Log any critical errors
+        Log::channel('papertrail')->error("Critical error in stock adjustment process: " . $e->getMessage());
+        
+        return [
+            'total_products_in_system' => 0,
+            'products_processed' => 0,
+            'successful_adjustments' => 0,
+            'failed_adjustments' => 0,
+            'skipped_service_items' => 0,
+            'products_without_etims_id_details' => [],
+            'error' => $e->getMessage()
+        ];
+    }   
+}
 
     //Remove non-numeric characters except decimal point
     function cleanUnitPrice($price) {
