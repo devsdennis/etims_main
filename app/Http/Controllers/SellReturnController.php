@@ -288,6 +288,93 @@ class SellReturnController extends Controller
 
                 $receipt = $this->receiptContent($business_id, $sell_return->location_id, $sell_return->id);
 
+                //etims function 
+                $sell_return = Transaction::findorfail($sell_return->id);
+
+                // Get the original transaction ID from the input
+                $originalTransactionId = $input['transaction_id'] ?? null;
+
+                 if ($originalTransactionId) {
+                // Fetch the original transaction
+                $originalTransaction = Transaction::find($originalTransactionId);
+                
+                        if ($originalTransaction) {
+                            // Get the original invoice number from custom_field_3
+                            $originalInvoiceNumber = (int)$originalTransaction->custom_field_3;
+                            
+                            \Log::info('Original Invoice Number Retrieved', [
+                                'original_transaction_id' => $originalTransactionId,
+                                'original_invoice_number' => $originalInvoiceNumber,
+                                'custom_field_3' => $originalTransaction->custom_field_3,
+                                'sell_return_id' => $sell_return->id
+                            ]);
+                            
+                            // Check if original invoice number is valid
+                            if ($originalInvoiceNumber <= 0) {
+                                \Log::warning('Original invoice number is missing for credit note submission', [
+                                    'sell_return_id' => $sell_return->id,
+                                    'original_transaction_id' => $originalTransactionId,
+                                    'custom_field_3' => $originalTransaction->custom_field_3,
+                                ]);
+                            } else {
+                                // You can now use $originalInvoiceNumber for your credit note submission
+                                \Log::info('Valid original invoice number found', [
+                                    'original_invoice_number' => $originalInvoiceNumber,
+                                    'sell_return_id' => $sell_return->id
+                                ]);
+                                
+                                // TODO: Use $originalInvoiceNumber for credit note submission
+                            }
+                        } else {
+                            \Log::error('Original transaction not found', [
+                                'original_transaction_id' => $originalTransactionId,
+                                'sell_return_id' => $sell_return->id
+                            ]);
+                        }
+                    } else {
+                        \Log::error('No original transaction ID provided in input', [
+                            'sell_return_id' => $sell_return->id,
+                            'input' => $input
+                        ]);
+                    }
+                
+                  // Check if the original invoice number exists in custom_field_3
+                //$originalInvoiceNumber = (int)$sell_return->custom_field_3; // Ensure this field is correct
+                
+                  // Log the issue if original_invoice_number is missing
+                if ($originalInvoiceNumber <= 0) {
+                    \Log::warning('Original invoice number is missing for credit note submission', [
+                        'sell_return_id' => $sell_return->id,
+                    ]);
+                }
+
+                // Call the etims controller for credit note submission
+                  // Call the etims controller for credit note submission only if the original invoice number exists
+                if ($originalInvoiceNumber > 0) {
+                $etimsController = new \App\Http\Controllers\EtimsController();
+                $etimsUrl = $etimsController->submitCreditNoteToEtims($sell_return);
+
+                    // Optional: Log if eTIMS submission fails
+                    if (!$etimsUrl) {
+                    DB::rollBack(); // Rollback the transaction if eTIMS submission fails
+                        \Log::warning('eTIMS Credit Note Submission Failed', [
+                            'sell_return_id' => $sell_return->id
+                        ]);
+                        $msg = __('eTIMS Credit Note Submission Failed');
+
+                        $output = ['success' => 0,
+                        'msg' => $msg,
+                            ];
+
+                    return $output;
+
+                    }
+                    
+                }
+
+                //end of etims 
+
+
                 DB::commit();
 
                 $output = ['success' => 1,

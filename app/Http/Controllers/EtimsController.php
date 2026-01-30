@@ -1696,14 +1696,7 @@ public function submitSaleToEtims($transaction)
 
             // Retrieve the digitax_id for the product and location
             $digitax_id = $this->getDigitaxId($sell_line->product_id, $transaction->location_id);
-
-//            $items[] = [
-//                'id' => (string)$digitax_id, // Use custom_field1 as eTIMS item ID
-//                'quantity' => $this->num_uf($sell_line->quantity),
-//                'unit_price' => $this->num_uf($sell_line->unit_price_inc_tax),
-//                'discount_rate' => 0,
-//                'discount_amount' => 0,
-//            ];
+ 
             $quant_sold = $this->num_uf($sell_line->quantity);
             $unit_price_sold = $this->num_uf($sell_line->unit_price_inc_tax);
             
@@ -1727,22 +1720,11 @@ public function submitSaleToEtims($transaction)
         
         $liveUrl = 'https://api.digitax.tech/ke/v2/sales';
         $apiKey = $this->retrieveApiKeyForLocation($transaction->location_id);
-        $date =  Carbon::now()->format('Y-m-d');
-      
+        $date = Carbon::now()->utc()->format('Y-m-d');
 
-//        $payload = [
-//            // 'sale_date' =>$date,
-//            'items' => $items,
-//            'customer_pin' => $customer->tax_number  ?? $customer->contact_id, // Use custom_field1 as PIN
-//            'customer_name' => $customer->name ?? $customer->supplier_business_name,
-//            'trader_invoice_number' => (string) $transaction->id,
-//            'invoice_number' => $transaction->invoice_no,
-//            'receipt_type_code' => 'S', // Default to sale receipt
-//            'payment_type_code' => $paymentTypeCode,
-//            'invoice_status_code' => '02', // Active invoice
-//            'callback_url' => 'https://crown.techsavyprofessionals.co.ke/api/etims/callback', // Define this route
-//            'general_invoice_details' => 'Sale transaction #' . $transaction->invoice_no,
-//        ];
+      
+        Log::info('Dates: ' . $date);
+       
         $payload = [
             'sale_date' =>$date,
             'items' => $items,

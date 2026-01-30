@@ -1,8 +1,8 @@
 <br/>
-<table style="width:100%;">
+<table style="width:100%; background-color: black; padding: 20px;">
 	<thead>
 		<tr>
-			<td>
+			<td style="background-color: white; padding: 15px;">
 
 			@if(!empty($receipt_details->invoice_heading))
 				<p class="text-right text-muted-imp" style="font-weight: bold; font-size: 18px !important">{!! $receipt_details->invoice_heading !!}</p>
@@ -22,7 +22,7 @@
 
 	<tbody>
 		<tr>
-			<td>
+			<td style="background-color: white; padding: 15px;">
 
 @if(!empty($receipt_details->header_text))
 	<div class="row invoice-info">
@@ -33,9 +33,9 @@
 @endif
 
 <!-- business information here -->
-<div class="row invoice-info">
+<div class="row invoice-info" style="color: black;">
 
-	<div class="col-md-6 invoice-col width-50 color-555">
+	<div class="col-md-6 invoice-col width-50" style="color: black;">
 		
 		<!-- Logo -->
 		@if(!empty($receipt_details->logo))
@@ -138,7 +138,7 @@
 		
 		<!-- Total Paid-->
 		@if(!empty($receipt_details->total_paid))
-			<p class="text-right font-23 color-555">
+			<p class="text-right font-23" style="color: black;">
 				<span class="pull-left">{!! $receipt_details->total_paid_label !!}</span>
 				{{$receipt_details->total_paid}}
 			</p>
@@ -146,7 +146,7 @@
 
 		<!-- Date-->
 		@if(!empty($receipt_details->date_label))
-			<p class="text-right font-23 color-555">
+			<p class="text-right font-23" style="color: black;">
 				<span class="pull-left">
 					{{$receipt_details->date_label}}
 				</span>
@@ -157,7 +157,7 @@
 	</div>
 </div>
 
-<div class="row invoice-info color-555">
+<div class="row invoice-info" style="color: black;">
 	<br/>
 	<div class="col-md-6 invoice-col width-50 word-wrap">
 		<b>{{ $receipt_details->customer_label ?? '' }}</b><br/>
@@ -205,10 +205,16 @@
 	
 </div>
 
-<div class="row color-555">
+<div class="row" style="color: black;">
 	<div class="col-xs-12">
 		<br/>
-		<table class="table table-bordered table-no-top-cell-border">
+		<table class="table table-bordered table-no-top-cell-border" style="border-color: black !important;">
+			<style>
+				.table-bordered td,
+				.table-bordered th {
+					border: 1px solid black !important;
+				}
+			</style>
 			<thead>
 				<tr style="background-color: #357ca5 !important; color: white !important; font-size: 20px !important" class="table-no-side-cell-border table-no-top-cell-border text-center">
 					<td style="background-color: #357ca5 !important; color: white !important; width: 5% !important">No</td>
@@ -292,15 +298,22 @@
 	</div>
 </div>
 
-<div class="row invoice-info color-555" style="page-break-inside: avoid !important">
+<div class="row invoice-info" style="color: black; page-break-inside: avoid !important">
 	<div class="col-md-6 invoice-col width-50">
 		<b class="pull-left">Authorized Signatory</b>
 	</div>
 
 	<div class="col-md-6 invoice-col width-50">
 		<table class="table-no-side-cell-border table-no-top-cell-border width-100">
+			<style>
+				.table-no-side-cell-border td,
+				.table-no-side-cell-border th {
+					border-top: 1px solid black !important;
+					border-bottom: 1px solid black !important;
+				}
+			</style>
 			<tbody>
-				<tr class="color-555">
+				<tr style="color: black;">
 					<td style="width:50%">
 						{!! $receipt_details->subtotal_label !!}
 					</td>
@@ -312,7 +325,7 @@
 				<!-- Tax -->
 				@if(!empty($receipt_details->taxes))
 					@foreach($receipt_details->taxes as $k => $v)
-						<tr class="color-555">
+						<tr style="color: black;">
 							<td>{{$k}}</td>
 							<td class="text-right">{{$v}}</td>
 						</tr>
@@ -321,7 +334,7 @@
 
 				<!-- Discount -->
 				@if( !empty($receipt_details->discount) )
-					<tr class="color-555">
+					<tr style="color: black;">
 						<td>
 							{!! $receipt_details->discount_label !!}
 						</td>
@@ -334,7 +347,7 @@
 
 				@if(!empty($receipt_details->group_tax_details))
 					@foreach($receipt_details->group_tax_details as $key => $value)
-						<tr class="color-555">
+						<tr style="color: black;">
 							<td>
 								{!! $key !!}
 							</td>
@@ -345,7 +358,7 @@
 					@endforeach
 				@else
 					@if( !empty($receipt_details->tax) )
-						<tr class="color-555">
+						<tr style="color: black;">
 							<td>
 								{!! $receipt_details->tax_label !!}
 							</td>
@@ -370,7 +383,7 @@
 	</div>
 </div>
 
-<div class="row color-555">
+<div class="row" style="color: black;">
 	<div class="col-xs-6">
 		{{$receipt_details->additional_notes}}
 	</div>
@@ -384,7 +397,7 @@
 </div>
 
 @if(!empty($receipt_details->footer_text))
-	<div class="row color-555">
+	<div class="row" style="color: black;">
 		<div class="col-xs-12">
 			{!! $receipt_details->footer_text !!}
 		</div>
