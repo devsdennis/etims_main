@@ -140,10 +140,10 @@
                 <div>
                     @if(!empty($receipt_details->header_text))
                         <span class="headings">{!! $receipt_details->header_text !!}</span>
-                    @endif
+                    @endif<br>
                     @if(!empty($receipt_details->display_name))
                         <span class="headings">{{ $receipt_details->display_name }}</span>
-                    @endif
+                    @endif<br
                     @if(!empty($receipt_details->address))
                         {!! $receipt_details->address !!}
                     @endif
@@ -151,7 +151,6 @@
                         {!! $receipt_details->contact !!}
                     @endif
                     @if(!empty($receipt_details->contact) && !empty($receipt_details->website))
-                        ,
                     @endif
                     @if(!empty($receipt_details->website))
                         {{ $receipt_details->website }}
@@ -202,19 +201,7 @@
 						<span class="sub-headings">{!! $receipt_details->invoice_heading !!}</span>
 					@endif
                 </div> 
-            @if(!empty($receipt_details->etims_url))
-            <div style="display: flex; align-items: center; padding-bottom: 2px;">
-               <img class="center-block" style="max-width: 150px; margin-bottom: 2px;" src="data:image/png;base64,{{ DNS2D::getBarcodePNG($receipt_details->etims_url, 'QRCODE', 3, 3) }}">
-            </div>   
-            @elseif($receipt_details->show_qr_code && !empty($receipt_details->qr_code_text))
-            <div style="display: flex; align-items: center;padding-bottom: 2px;">
-                <img 
-                    src="data:image/png;base64,{{ DNS2D::getBarcodePNG($receipt_details->qr_code_text, 'QRCODE') }}" 
-                    style="float: right; width: 80px; height: 80px;margin-top:10px;" 
-                    alt="QR Code"
-                > 
-            </div>    
-            @endif    
+               
             </div>
 
             <div class="border-top textbox">
@@ -354,6 +341,19 @@
                             <strong>Receipt Ref:</strong> {{ $receipt_details->etims_receipt }}<br>
                             <strong>Date:</strong> {{ $receipt_details->etims_date }} {{ $receipt_details->etims_time }}
                         </p>
+						 @if(!empty($receipt_details->etims_url))
+							<div style="display: flex; align-items: center; padding-bottom: 2px;">
+							<img class="center-block" style="max-width: 150px; margin-bottom: 2px;" src="data:image/png;base64,{{ DNS2D::getBarcodePNG($receipt_details->etims_url, 'QRCODE', 3, 3) }}">
+							</div>   
+							@elseif($receipt_details->show_qr_code && !empty($receipt_details->qr_code_text))
+							<div style="display: flex; align-items: center;padding-bottom: 2px;">
+								<img 
+									src="data:image/png;base64,{{ DNS2D::getBarcodePNG($receipt_details->qr_code_text, 'QRCODE') }}" 
+									style="float: right; width: 80px; height: 80px;margin-top:10px;" 
+									alt="QR Code"
+								> 
+							</div>    
+            			@endif
                  
                     <!--@if(!empty($receipt_details->etims_url))-->
                     <!--<div class="centered mt-5">-->
